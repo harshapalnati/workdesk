@@ -528,9 +528,21 @@ pub async fn chat(
     let active_window = context::get_active_window_info().unwrap_or_else(|_| "Unknown".to_string());
     let cwd = working_dir.clone().unwrap_or_else(|| ".".to_string());
     
+    // Auto-fetch file tree context
+    let file_tree = commands::get_file_tree(cwd.clone()).unwrap_or_default();
+    let tree_summary = serde_json::to_string_pretty(&file_tree).unwrap_or_default();
+    let truncated_tree = if tree_summary.len() > 2000 {
+        format!("{}... (truncated)", &tree_summary[..2000])
+    } else {
+        tree_summary
+    };
+
     let system_prompt = format!(r#"You are DeskWork, an advanced desktop agent running on Windows.
 Active Working Directory: '{cwd}'.
 Active Window: '{active_window}'.
+
+PROJECT CONTEXT (File Tree):
+{truncated_tree}
 
 CAPABILITIES & PERMISSIONS:
 - File System: You have FULL permission to Read, Write, List, and Delete files.
@@ -561,13 +573,16 @@ BROWSER AUTOMATION (Google Calendar/Gmail/etc):
 5. Click: mouse_click("left")
 6. Type: keyboard_type("Meeting with team")
 
+HELP & DISCOVERY:
+If the user asks for "help" or "what can you do", output a markdown table listing your tools and capabilities.
+
 TOOLS:
 - set_plan(steps): Visual progress.
 - complete_step(step_index).
 - list_dir, read_file, write_file, execute_command.
 - open_app(path), fetch_url(url), get_system_stats(), search_files(query, path), search_web(query).
 - keyboard_type(text), keyboard_press(key), mouse_move(x,y), mouse_click(btn), get_screenshot(), wait(ms).
-- create_docx(content, filename), create_slide_deck(content, filename), find_file_smart(query, path)."#, cwd=cwd, active_window=active_window);
+- create_docx(content, filename), create_slide_deck(content, filename), find_file_smart(query, path)."#, cwd=cwd, active_window=active_window, truncated_tree=truncated_tree);
     // Initialize System Prompt if empty
     if history.is_empty() {
         history.push(Message { role: "system".into(), content: Some(MessageContent::Text(system_prompt)), tool_calls: None, tool_call_id: None });

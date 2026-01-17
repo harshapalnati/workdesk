@@ -3,13 +3,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Send, Terminal, Settings as SettingsIcon, MessageSquare, Loader2, CheckCircle2, FileText, FolderOpen, Plus, Folder, LayoutTemplate, Globe, Cpu, Search, Monitor, Star, StarOff, Edit3, AlertOctagon, Copy } from "lucide-react";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { SettingsModal } from "./SettingsModal";
 import { RightSidebar } from "./RightSidebar";
 import "./App.css";
 
+// Updated Message Interface
+interface MessageContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: { url: string };
+}
+
 interface Message {
   role: "user" | "assistant";
-  content: string;
+  content: string | MessageContentPart[];
 }
 
 interface ActivityEvent {
@@ -101,23 +112,35 @@ function App() {
 
   const normalizeMessages = (rawMessages: any[] = []): Message[] => {
     return rawMessages
-      .filter((m) => m.role === "user" || m.role === "assistant")
+      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool") // Keep tools? usually not for display unless debug
       .map((m) => {
-        let text = "";
+        let content: string | MessageContentPart[] = "";
+        
         if (typeof m.content === "string") {
-          text = m.content;
+          content = m.content;
         } else if (m.content?.Text) {
-          text = m.content.Text;
+          content = m.content.Text;
         } else if (m.content?.text) {
-          text = m.content.text;
+          content = m.content.text;
         } else if (m.content?.Parts) {
-          text = m.content.Parts.map((p: any) => p.text).filter(Boolean).join("\n");
+          // This is the structured format from backend
+          content = m.content.Parts.map((p: any) => ({
+            type: p.type || (p.image_url ? "image_url" : "text"),
+            text: p.text,
+            image_url: p.image_url
+          }));
         } else if (Array.isArray(m.content)) {
-          text = m.content.map((p: any) => p.text).filter(Boolean).join("\n");
+           // Fallback array handling
+           content = m.content.map((p: any) => ({
+            type: p.type || "text",
+            text: p.text,
+            image_url: p.image_url
+          }));
         }
+
         return {
           role: m.role,
-          content: text || "[Unsupported message format omitted]",
+          content: content || "[Unsupported message format omitted]",
         } as Message;
       });
   };
@@ -498,14 +521,75 @@ function App() {
                   className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in slide-in-from-bottom-2 duration-300`}
                 >
                   <div
-                    className={`max-w-[85%] lg:max-w-[70%] rounded-2xl px-5 py-3.5 text-sm leading-relaxed shadow-sm ${
+                    className={`max-w-[85%] lg:max-w-[85%] rounded-2xl px-5 py-3.5 text-sm leading-relaxed shadow-sm overflow-hidden ${
                       msg.role === "user"
                         ? "bg-indigo-600 text-white shadow-indigo-500/10 rounded-br-sm"
                         : "bg-zinc-900 border border-white/5 text-zinc-200 rounded-bl-sm"
                     }`}
                   >
-                    <div className="whitespace-pre-wrap font-normal">
-                      {msg.content}
+                    <div className="font-normal prose prose-invert max-w-none prose-p:my-1 prose-pre:bg-zinc-950/50 prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg">
+                      {Array.isArray(msg.content) ? (
+                        msg.content.map((part, partIdx) => {
+                          if (part.type === "image_url" && part.image_url) {
+                            return (
+                              <img 
+                                key={partIdx} 
+                                src={part.image_url.url} 
+                                alt="Content" 
+                                className="max-w-full rounded-lg border border-white/10 my-2" 
+                              />
+                            );
+                          }
+                          return (
+                            <ReactMarkdown 
+                              key={partIdx} 
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                code({node, inline, className, children, ...props}: any) {
+                                  const match = /language-(\w+)/.exec(className || '')
+                                  return !inline && match ? (
+                                    <SyntaxHighlighter
+                                      {...props}
+                                      style={vscDarkPlus}
+                                      language={match[1]}
+                                      PreTag="div"
+                                    >{String(children).replace(/\n$/, '')}</SyntaxHighlighter>
+                                  ) : (
+                                    <code {...props} className={className}>
+                                      {children}
+                                    </code>
+                                  )
+                                }
+                              }}
+                            >
+                              {part.text || ""}
+                            </ReactMarkdown>
+                          );
+                        })
+                      ) : (
+                        <ReactMarkdown 
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            code({node, inline, className, children, ...props}: any) {
+                              const match = /language-(\w+)/.exec(className || '')
+                              return !inline && match ? (
+                                <SyntaxHighlighter
+                                  {...props}
+                                  style={vscDarkPlus}
+                                  language={match[1]}
+                                  PreTag="div"
+                                >{String(children).replace(/\n$/, '')}</SyntaxHighlighter>
+                              ) : (
+                                <code {...props} className={className}>
+                                  {children}
+                                </code>
+                              )
+                            }
+                          }}
+                        >
+                          {msg.content as string}
+                        </ReactMarkdown>
+                      )}
                     </div>
                   </div>
                 </div>
