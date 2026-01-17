@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeskWork • Native Desktop Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/landing.css" />
+  </head>
+  <body>
+    <div class="grid-overlay"></div>
+    <div class="page">
+      <header>
+        <div class="brand">
+          <div class="brand-mark">DW</div>
+          <div>
+            DeskWork
+            <div style="color: var(--muted); font-size: 12px; font-weight: 500;">Native desktop agent</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="pill" href="https://github.com/langchain-ai/openwork" target="_blank" rel="noreferrer">OpenWork (LC)</a>
+          <a class="pill" href="https://github.com/different-ai/openwork" target="_blank" rel="noreferrer">OpenWork (Different)</a>
+          <a class="pill" href="https://github.com/your-org/deskwork" target="_blank" rel="noreferrer">GitHub</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <div>
+          <div class="badge-row">
+            <span class="badge">Bun + Vite</span>
+            <span class="badge">Rust/Tauri backend</span>
+            <span class="badge">Guardrails on by default</span>
+          </div>
+          <h1 class="title">Ship work safely with a native desktop agent.</h1>
+          <p class="subtitle">
+            DeskWork automates filesystem, shell, and UI work with explicit approvals, fast Bun builds, and a Rust
+            backend you can read, audit, and fork.
+          </p>
+          <div class="cta-row">
+            <a class="btn" href="https://github.com/your-org/deskwork" target="_blank" rel="noreferrer">
+              Open on GitHub
+            </a>
+            <a class="btn secondary" href="#stack">See architecture</a>
+          </div>
+          <div class="feature-grid">
+            <div class="feature">
+              <h4>Explicit approvals</h4>
+              <p>Sensitive tools pause until the user replies with <code>approve &lt;action&gt;</code>.</p>
+            </div>
+            <div class="feature">
+              <h4>Native shell</h4>
+              <p>Tauri + Rust commands for file I/O, system stats, screenshots, and automation.</p>
+            </div>
+            <div class="feature">
+              <h4>Bun toolchain</h4>
+              <p>Fast install/build, zero Node bloat. Vite stays for the React layer.</p>
+            </div>
+            <div class="feature">
+              <h4>Privacy defaults</h4>
+              <p>API keys live in the keyring; tool outputs are redacted before sessions are stored.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="tag">Flow</div>
+          <div class="timeline">
+            <div class="timeline-row">
+              <div style="color: var(--muted);">01. Context</div>
+              <div>Agent reads working dir + active window (Windows) to scope actions.</div>
+            </div>
+            <div class="timeline-row">
+              <div style="color: var(--muted);">02. Plan</div>
+              <div>LLM drafts steps; sensitive ones are flagged for approval.</div>
+            </div>
+            <div class="timeline-row">
+              <div style="color: var(--muted);">03. Approve</div>
+              <div>User replies <code>approve execute_command</code> or <code>approve all</code>.</div>
+            </div>
+            <div class="timeline-row">
+              <div style="color: var(--muted);">04. Act</div>
+              <div>Rust commands run; activity feed streams events; sessions persist without raw tool output.</div>
+            </div>
+          </div>
+          <div class="code">
+            approve execute_command<br />
+            approve write_file<br />
+            approve all
+          </div>
+        </div>
+      </section>
+
+      <section class="grid-two" id="stack">
+        <div class="panel">
+          <div class="tag">Safety posture</div>
+          <ul class="list">
+            <li><span>•</span><span>Sensitive tools (shell, file writes, input simulation, web open) are gated by chat approval.</span></li>
+            <li><span>•</span><span>Tool outputs and screenshots are redacted before session persistence.</span></li>
+            <li><span>•</span><span>API keys stored in OS keyring; disk copy is blanked on save.</span></li>
+            <li><span>•</span><span>Frontend surfaces pending approvals to prevent silent execution.</span></li>
+          </ul>
+        </div>
+        <div class="panel">
+          <div class="tag">Stack</div>
+          <div class="stack">
+            <span class="badge">Bun + Vite + React</span>
+            <span class="badge">Tauri 2</span>
+            <span class="badge">Rust</span>
+            <span class="badge">OpenAI tools API</span>
+            <span class="badge">Keyring storage</span>
+          </div>
+          <div class="code">
+            bun install<br />
+            bun run dev<br />
+            bun run tauri dev
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top: 28px;">
+        <div class="tag">Why now</div>
+        <p style="color: var(--muted); margin-top: 10px;">
+          OpenWork set the bar for desktop agents. DeskWork adapts that spirit for a native Rust/Tauri runtime with
+          explicit guardrails, Bun-first tooling, and production-ready defaults you can fork today.
+        </p>
+      </section>
+
+      <footer class="footer">
+        <div>DeskWork • Native desktop agent. Crafted for production, open for audit.</div>
+      </footer>
+    </div>
+  </body>
+</html>

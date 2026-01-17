@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.x"
+      - name: Install JS deps
+        working-directory: deskwork
+        run: bun install
+      - name: Build web
+        working-directory: deskwork
+        run: bun run build
+      - name: Rust fmt
+        working-directory: deskwork/src-tauri
+        run: cargo fmt -- --check
+      - name: Rust tests
+        working-directory: deskwork/src-tauri
+        run: cargo test

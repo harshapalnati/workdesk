@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* Import a serif font for that 'Claude' literary feel */
+@import url('https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,300;0,400;0,700;1,300&family=Inter:wght@300;400;500;600&display=swap');
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  /* Warmer dark theme (Stone-950 instead of Zinc-950) */
+  background-color: #0c0a09; 
+  color: #f5f5f4;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Claude-like Serif Headings */
+h1, h2, h3, h4, h5, h6, .font-serif {
+  font-family: 'Merriweather', serif;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #292524; /* Stone-800 */
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #44403c; /* Stone-700 */
+}
+
+/* Selection Color (Warm Orange/clay instead of Blue) */
+::selection {
+  background-color: #ea580c40; /* Orange-600 with opacity */
+  color: #fff;
+}
+
+/* Accessibility toggles */
+:root.high-contrast {
+  --bg: #030712;
+  --panel: #0b1220;
+  --text: #f8fafc;
+  --muted: #cbd5e1;
+  --border: rgba(255, 255, 255, 0.3);
+}
+
+:root.reduced-motion * {
+  animation-duration: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0ms !important;
+}
