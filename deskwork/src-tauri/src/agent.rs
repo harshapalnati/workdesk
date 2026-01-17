@@ -400,7 +400,7 @@ async fn dispatch_tool(
         let _ = audit::append_audit(
             function_name,
             if tool_output.is_ok() { "success" } else { "error" },
-            format!("{:?}", args),
+            &args.to_string(),
             duration_ms,
             working_dir.clone(),
             structured_logs,
@@ -449,7 +449,7 @@ pub async fn chat(
     if let Some(rest) = trimmed.strip_prefix("approve ") {
         let id = rest.trim();
         if let Some(pending) = pop_approval(&approval_state, id) {
-            let result = dispatch_tool(&app, &pending.function_name, &pending.args, &pending.working_dir, pending.id.clone(), settings.structured_logs).await;
+            let result = dispatch_tool(&app, &pending.function_name, &pending.args, &pending.working_dir, pending.id.clone(), false).await;
             let _ = app.emit("approval_resolved", json!({"id": id, "status": "approved"}));
             return Ok(match result {
                 Ok(msg) => match msg {
@@ -513,7 +513,7 @@ pub async fn chat(
         if path.exists() {
             let content = std::fs::read_to_string(path).unwrap_or_default();
             let session: Session = serde_json::from_str(&content).unwrap_or_else(|_| Session {
-                id: sid.clone(), title: "Error".into(), messages: vec![], created_at: 0, updated_at: 0
+                id: sid.clone(), title: "Error".into(), messages: vec![], created_at: 0, updated_at: 0, pinned: false
             });
             history = session.messages;
         } else {
@@ -526,7 +526,7 @@ pub async fn chat(
 
     // 3. Context & System Prompt
     let active_window = context::get_active_window_info().unwrap_or_else(|_| "Unknown".to_string());
-    let cwd = working_dir.unwrap_or_else(|| ".".to_string());
+    let cwd = working_dir.clone().unwrap_or_else(|| ".".to_string());
     
     let system_prompt = format!(r#"You are DeskWork, an advanced desktop agent running on Windows.
 Active Working Directory: '{cwd}'.
@@ -753,6 +753,7 @@ TOOLS:
             messages: sanitized,
             created_at: 0,
             updated_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            pinned: false,
         };
         save_session_to_disk(&session).ok();
     } else {

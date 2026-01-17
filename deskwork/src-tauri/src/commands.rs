@@ -3,13 +3,17 @@ use std::process::Command;
 use std::path::Path;
 use serde::Serialize;
 use sysinfo::{System, Networks, Components};
-use enigo::{Enigo, Key, KeyboardControllable, MouseControllable, MouseButton};
+use enigo::{Enigo, Key, Keyboard, Mouse, Button, Settings, Direction, Coordinate};
 use std::thread;
 use std::time::Duration;
 use screenshots::Screen;
 use std::io::Cursor;
 use base64::Engine;
-use image::ImageFormat;
+use sha2::Digest; // Add this import
+
+// We need to use the image crate types that screenshots expects, or handle conversion
+// screenshots 0.8.4 uses image 0.24 internally.
+use image::ImageFormat; 
 
 use docx_rs::*;
 use walkdir::WalkDir;
@@ -203,14 +207,14 @@ pub fn search_web(query: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn keyboard_type(text: String) -> Result<(), String> {
-    let mut enigo = Enigo::new();
-    enigo.key_sequence(&text);
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    enigo.text(&text).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn keyboard_press(key: String) -> Result<(), String> {
-    let mut enigo = Enigo::new();
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
     let key_to_press = match key.to_lowercase().as_str() {
         "enter" | "return" => Key::Return,
         "tab" => Key::Tab,
@@ -224,7 +228,7 @@ pub fn keyboard_press(key: String) -> Result<(), String> {
         "right" | "arrowright" => Key::RightArrow,
         _ => return Err(format!("Unsupported key: {}", key)),
     };
-    enigo.key_click(key_to_press);
+    enigo.key(key_to_press, Direction::Click).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -236,21 +240,21 @@ pub async fn wait(milliseconds: u64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn mouse_move(x: i32, y: i32) -> Result<(), String> {
-    let mut enigo = Enigo::new();
-    enigo.mouse_move_to(x, y);
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    enigo.move_mouse(x, y, Coordinate::Abs).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn mouse_click(button: String) -> Result<(), String> {
-    let mut enigo = Enigo::new();
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
     let btn = match button.to_lowercase().as_str() {
-        "left" => MouseButton::Left,
-        "right" => MouseButton::Right,
-        "middle" => MouseButton::Middle,
+        "left" => Button::Left,
+        "right" => Button::Right,
+        "middle" => Button::Middle,
         _ => return Err(format!("Unsupported button: {}", button)),
     };
-    enigo.mouse_click(btn);
+    enigo.button(btn, Direction::Click).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -344,7 +348,14 @@ pub fn get_screenshot() -> Result<String, String> {
     let screen = screens.first().ok_or("No screen found")?;
     let image = screen.capture().map_err(|e| e.to_string())?;
     
+    // screenshots 0.8 returns an image::RgbaImage. 
+    // We need to write this to a buffer as PNG.
     let mut bytes: Vec<u8> = Vec::new();
+    
+    // The 'image' dependency in Cargo.toml is 0.24, which matches screenshots 0.8 dependency.
+    // However, if there's still a mismatch or issue with From<ImageFormat>, we can explicitely use PNG encoder
+    // or rely on dynamic image.
+    
     image.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png).map_err(|e| e.to_string())?;
     
     let base64_str = base64::engine::general_purpose::STANDARD.encode(&bytes);
