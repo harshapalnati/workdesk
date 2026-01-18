@@ -3,7 +3,7 @@
   "openai_api_key": "",
   "model": "gpt-4",
   "read_only": false,
-  "structured_logs": false,
+  "structured_logs": true,
   "provider": "openai",
   "reduced_motion": false,
   "high_contrast": false

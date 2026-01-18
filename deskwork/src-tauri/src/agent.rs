@@ -10,6 +10,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tauri::Emitter;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use crate::logging;
 
 // Re-export Message structs so other modules can use them
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -166,6 +167,7 @@ fn request_approval(
     args: Value,
     working_dir: Option<String>,
     reason: String,
+    session_id: Option<String>,
 ) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     let expires_at = now_ts() + APPROVAL_EXPIRY_SECS;
@@ -178,6 +180,7 @@ fn request_approval(
             args: args.clone(),
             working_dir: working_dir.clone(),
             expires_at,
+            session_id,
         });
     }
 
@@ -261,7 +264,14 @@ async fn dispatch_tool(
     id: String,
     structured_logs: bool,
     audit_state: &tauri::State<'_, crate::audit::AuditState>,
+    session_id: Option<&String>,
 ) -> Result<MessageContent, String> {
+    
+    // Log tool call start
+    if let Some(sid) = session_id {
+        logging::log(app, sid, "TOOL_START", &format!("Tool: {}, Args: {}", function_name, args));
+    }
+
     let start = std::time::Instant::now();
     let tool_output = match function_name {
         "set_plan" => {
@@ -381,6 +391,22 @@ async fn dispatch_tool(
     };
 
     let duration_ms = start.elapsed().as_millis();
+    
+    // Log tool result
+    if let Some(sid) = session_id {
+        let result_summary = match &tool_output {
+            Ok(MessageContent::Text(t)) => t.chars().take(500).collect::<String>(), // Truncate for log
+            Ok(MessageContent::Parts(_)) => "(structured content)".to_string(),
+            Err(e) => format!("Error: {}", e),
+        };
+        logging::log(app, sid, "TOOL_END", &format!("Tool: {}, Status: {}, Duration: {}ms, Output: {}", 
+            function_name, 
+            if tool_output.is_ok() { "Success" } else { "Failed" }, 
+            duration_ms, 
+            result_summary
+        ));
+    }
+
     if !matches!(function_name, "set_plan" | "complete_step") {
         let _ = app.emit("activity", ActivityEvent {
            id: id.clone(),
@@ -438,6 +464,7 @@ pub struct PendingApproval {
     pub args: Value,
     pub working_dir: Option<String>,
     pub expires_at: u64,
+    pub session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -487,7 +514,9 @@ pub async fn chat(
     if let Some(rest) = trimmed.strip_prefix("approve ") {
         let id = rest.trim();
         if let Some(pending) = pop_approval(&approval_state, id) {
-            let result = dispatch_tool(&app, &pending.function_name, &pending.args, &pending.working_dir, pending.id.clone(), false, &audit_state).await;
+            // NOTE: We don't have session_id easily here for logging without more plumbing, 
+            // but approvals are secondary to the main flow.
+            let result = dispatch_tool(&app, &pending.function_name, &pending.args, &pending.working_dir, pending.id.clone(), false, &audit_state, pending.session_id.as_ref()).await;
             let _ = app.emit("approval_resolved", json!({"id": id, "status": "approved"}));
             return Ok(match result {
                 Ok(msg) => match msg {
@@ -541,6 +570,10 @@ pub async fn chat(
             current.clone()
         }
     };
+
+    if let Some(sid) = &active_session_id {
+        logging::log(&app, sid, "USER", &prompt);
+    }
 
     // Load History
     let mut history: Vec<Message>;
@@ -607,7 +640,7 @@ CAPABILITIES & PERMISSIONS:
 - Apps: You can open_app to launch files or applications.
 - Input Simulation: You can keyboard_type to type, keyboard_press to press keys, mouse_move and mouse_click to control cursor. Use wait to pause.
 - Vision: You can get_screenshot to see the screen and find where buttons are.
-- Content Creation: You can create_docx for Word docs and create_slide_deck for presentations (HTML/Reveal.js).
+- Content Creation: You can create_docx for Word docs and create_slide_deck for presentations (HTML/Reveal.js). Filename MUST end in .html.
 - System: You can get_system_stats to check resources.
 - Search: You can search_files (grep) to find text, or find_file_smart to find files by name/path.
 
@@ -806,6 +839,7 @@ TOOLS:
                         args.clone(),
                         working_dir.clone(),
                         reason,
+                        active_session_id.clone(),
                     );
                     history.push(Message {
                         role: "assistant".into(),
@@ -817,7 +851,7 @@ TOOLS:
                 }
 
                 let id = uuid::Uuid::new_v4().to_string();
-                let tool_output = dispatch_tool(&app, function_name, &args, &working_dir, id.clone(), settings.structured_logs, &audit_state).await;
+                let tool_output = dispatch_tool(&app, function_name, &args, &working_dir, id.clone(), settings.structured_logs, &audit_state, active_session_id.as_ref()).await;
 
                 history.push(Message {
                     role: "tool".into(),
@@ -831,16 +865,26 @@ TOOLS:
              // Handle response content which might be just text or null
             if let Some(content) = &message.content {
                 match content {
-                    MessageContent::Text(t) => final_response = t.clone(),
+                    MessageContent::Text(t) => {
+                        final_response = t.clone();
+                        // Log assistant response
+                        if let Some(sid) = &active_session_id {
+                            logging::log(&app, sid, "ASSISTANT", &t);
+                        }
+                    },
                     MessageContent::Parts(parts) => {
                         // Concatenate text parts for simple string return
                         final_response = parts.iter().filter_map(|p| p.text.clone()).collect::<Vec<_>>().join("\n");
+                        // Log assistant response
+                        if let Some(sid) = &active_session_id {
+                            logging::log(&app, sid, "ASSISTANT", &final_response);
+                        }
                     }
                 }
             }
             break;
         }
-}
+    }
 
     // Stream final response as tokens
     if !final_response.is_empty() {

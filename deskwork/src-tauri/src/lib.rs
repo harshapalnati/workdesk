@@ -12,6 +12,7 @@ mod session_manager;
 mod audit;
 mod templates;
 mod skills;
+mod logging;
 
 use agent::AgentState;
 use settings::{SettingsState, load_initial_settings};
@@ -81,7 +82,8 @@ pub fn run() {
             templates::save_template,
             templates::delete_template,
             skills::list_skills,
-            skills::toggle_skill
+            skills::toggle_skill,
+            logging::get_session_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
