@@ -2,7 +2,12 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Send, Terminal, Settings as SettingsIcon, MessageSquare, Loader2, CheckCircle2, FileText, FolderOpen, Plus, Folder, LayoutTemplate, Globe, Cpu, Search, Monitor, Star, StarOff, Edit3, AlertOctagon, Copy } from "lucide-react";
+import { 
+  Send, Terminal, Settings as SettingsIcon, MessageSquare, Loader2, 
+  CheckCircle2, FileText, FolderOpen, Plus, Folder, LayoutTemplate, 
+  Globe, Cpu, Search, Monitor, Star, StarOff, Edit3, AlertOctagon, 
+  Copy, ChevronDown, ChevronRight, Play, Check, X, Bookmark, Shield, Hammer
+} from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -11,16 +16,39 @@ import { SettingsModal } from "./SettingsModal";
 import { RightSidebar } from "./RightSidebar";
 import "./App.css";
 
-// Updated Message Interface
+// Updated Message Interfaces
 interface MessageContentPart {
   type: "text" | "image_url";
   text?: string;
   image_url?: { url: string };
 }
 
+interface ToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
 interface Message {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   content: string | MessageContentPart[];
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  id?: string; // Optional local ID for keying
+}
+
+interface ThreadItem {
+  type: "message" | "tool_group";
+  role?: "user" | "assistant";
+  content?: string | MessageContentPart[];
+  tools?: {
+    call: ToolCall;
+    result?: string;
+    status: "running" | "success" | "error";
+  }[];
 }
 
 interface ActivityEvent {
@@ -45,6 +73,12 @@ interface PendingApproval {
   expires_at: number;
 }
 
+interface Template {
+  id: string;
+  title: string;
+  prompt: string;
+}
+
 function App() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -58,6 +92,9 @@ function App() {
   const [sessionSearch, setSessionSearch] = useState("");
   const [displayPrefs, setDisplayPrefs] = useState<{ reduced_motion: boolean; high_contrast: boolean }>({ reduced_motion: false, high_contrast: false });
   const [errorToast, setErrorToast] = useState<{ message: string; detail?: string } | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [agentMode, setAgentMode] = useState<"plan" | "build">("build");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingMessageIndex = useRef<number | null>(null);
@@ -73,6 +110,8 @@ function App() {
 
   useEffect(() => {
     inputRef.current?.focus();
+    loadTemplates();
+    loadAgentMode();
   }, []);
 
   const activeApprovals = useMemo(
@@ -109,41 +148,180 @@ function App() {
     root.classList.toggle("high-contrast", displayPrefs.high_contrast);
   }, [displayPrefs]);
 
+  async function loadTemplates() {
+    try {
+      const list = await invoke<Template[]>("list_templates");
+      setTemplates(list);
+    } catch (e) {
+      console.error("Failed to load templates", e);
+    }
+  }
+
+  async function loadAgentMode() {
+    try {
+      const mode = await invoke<string>("get_agent_mode");
+      if (mode === "plan" || mode === "build") {
+        setAgentMode(mode);
+      }
+    } catch (e) {
+      console.error("Failed to load agent mode", e);
+    }
+  }
+
+  async function toggleAgentMode(mode: "plan" | "build") {
+    try {
+      await invoke("set_agent_mode", { mode });
+      setAgentMode(mode);
+    } catch (e) {
+      console.error("Failed to set agent mode", e);
+    }
+  }
+
+  async function saveAsTemplate() {
+    const title = prompt("Template Title:");
+    if (!title) return;
+    try {
+      const t = await invoke<Template>("save_template", { title, prompt: input });
+      setTemplates(prev => [...prev, t]);
+      alert("Template saved!");
+    } catch (e) {
+      console.error("Failed to save template", e);
+    }
+  }
 
   const normalizeMessages = (rawMessages: any[] = []): Message[] => {
-    return rawMessages
-      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool") // Keep tools? usually not for display unless debug
-      .map((m) => {
-        let content: string | MessageContentPart[] = "";
-        
-        if (typeof m.content === "string") {
-          content = m.content;
-        } else if (m.content?.Text) {
-          content = m.content.Text;
-        } else if (m.content?.text) {
-          content = m.content.text;
-        } else if (m.content?.Parts) {
-          // This is the structured format from backend
-          content = m.content.Parts.map((p: any) => ({
-            type: p.type || (p.image_url ? "image_url" : "text"),
-            text: p.text,
-            image_url: p.image_url
-          }));
-        } else if (Array.isArray(m.content)) {
-           // Fallback array handling
-           content = m.content.map((p: any) => ({
-            type: p.type || "text",
-            text: p.text,
-            image_url: p.image_url
-          }));
-        }
+    return rawMessages.map((m) => {
+      let content: string | MessageContentPart[] = "";
+      
+      if (typeof m.content === "string") {
+        content = m.content;
+      } else if (m.content?.Text) {
+        content = m.content.Text;
+      } else if (m.content?.text) {
+        content = m.content.text;
+      } else if (m.content?.Parts) {
+        content = m.content.Parts.map((p: any) => ({
+          type: p.type || (p.image_url ? "image_url" : "text"),
+          text: p.text,
+          image_url: p.image_url
+        }));
+      } else if (Array.isArray(m.content)) {
+         content = m.content.map((p: any) => ({
+          type: p.type || "text",
+          text: p.text,
+          image_url: p.image_url
+        }));
+      }
 
-        return {
-          role: m.role,
-          content: content || "[Unsupported message format omitted]",
-        } as Message;
-      });
+      return {
+        role: m.role,
+        content: content || "",
+        tool_calls: m.tool_calls,
+        tool_call_id: m.tool_call_id,
+      } as Message;
+    });
   };
+
+  const threadItems = useMemo(() => {
+    const items: ThreadItem[] = [];
+    let currentToolGroup: ThreadItem | null = null;
+
+    messages.forEach((msg) => {
+      if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+        // Start a tool group
+        currentToolGroup = {
+          type: "tool_group",
+          tools: msg.tool_calls.map(call => ({
+            call,
+            status: "running"
+          }))
+        };
+        items.push(currentToolGroup);
+      } else if (msg.role === "tool") {
+        // Update existing tool group
+        if (currentToolGroup && currentToolGroup.tools) {
+          const toolIdx = currentToolGroup.tools.findIndex(t => t.call.id === msg.tool_call_id);
+          if (toolIdx !== -1) {
+            currentToolGroup.tools[toolIdx].result = msg.content as string;
+            currentToolGroup.tools[toolIdx].status = "success"; // Assume success if we get a result
+          }
+        }
+      } else {
+        // Regular message
+        currentToolGroup = null; // Reset group
+        items.push({
+          type: "message",
+          role: msg.role as any,
+          content: msg.content
+        });
+      }
+    });
+    return items;
+  }, [messages]);
+
+  const ToolBlock = ({ tool }: { tool: { call: ToolCall; result?: string; status: string } }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    let args: any = {};
+    try {
+      args = JSON.parse(tool.call.function.arguments);
+    } catch (e) {}
+
+    const getToolTitle = () => {
+      const name = tool.call.function.name;
+      switch (name) {
+        case "execute_command":
+          return `Ran: ${args.command} ${(args.args || []).join(" ")}`;
+        case "read_file":
+          return `Read file: ${args.path}`;
+        case "write_file":
+          return `Updated file: ${args.path}`;
+        case "list_dir":
+          return `Listed directory: ${args.path}`;
+        case "search_files":
+          return `Searched "${args.query}" in ${args.path}`;
+        default:
+          return `Ran: ${name}`;
+      }
+    };
+
+    return (
+      <div className="rounded-lg border border-white/5 bg-zinc-900/50 overflow-hidden mb-2">
+        <button 
+          onClick={() => setIsOpen(!isOpen)}
+          className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-colors text-left"
+        >
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className={`p-1 rounded-md ${tool.status === 'success' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-zinc-800 text-zinc-400'}`}>
+               {tool.status === 'success' ? <Check className="w-3.5 h-3.5" /> : <Terminal className="w-3.5 h-3.5" />}
+            </div>
+            <span className="text-xs font-mono text-zinc-300 truncate">
+              {getToolTitle()}
+            </span>
+          </div>
+          <div className="shrink-0 text-zinc-600">
+             {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </div>
+        </button>
+        {isOpen && (
+          <div className="px-3 py-2 border-t border-white/5 bg-black/20">
+            <div className="text-[10px] text-zinc-500 mb-1 uppercase tracking-wider font-semibold">Input</div>
+            <pre className="text-xs text-zinc-400 font-mono overflow-x-auto bg-black/20 p-2 rounded mb-3">
+              {JSON.stringify(args, null, 2)}
+            </pre>
+            {tool.result && (
+              <>
+                <div className="text-[10px] text-zinc-500 mb-1 uppercase tracking-wider font-semibold">Output</div>
+                <pre className="text-xs text-zinc-300 font-mono overflow-x-auto max-h-60 bg-black/20 p-2 rounded">
+                  {tool.result.length > 2000 ? tool.result.slice(0, 2000) + "... (truncated)" : tool.result}
+                </pre>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
 
   useEffect(() => {
     loadSessions();
@@ -477,10 +655,38 @@ function App() {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col h-full relative bg-zinc-950/50">
+        
+        {/* Agent Mode Toggle (Top Right or Input) */}
+        <div className="absolute top-4 right-4 z-50 flex bg-zinc-900 rounded-lg p-1 border border-white/5 shadow-xl">
+           <button
+             onClick={() => toggleAgentMode("plan")}
+             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+               agentMode === "plan" 
+                 ? "bg-indigo-500/20 text-indigo-300 shadow-sm" 
+                 : "text-zinc-500 hover:text-zinc-300"
+             }`}
+           >
+             <Shield className="w-3.5 h-3.5" />
+             Plan
+           </button>
+           <button
+             onClick={() => toggleAgentMode("build")}
+             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+               agentMode === "build" 
+                 ? "bg-emerald-500/20 text-emerald-300 shadow-sm" 
+                 : "text-zinc-500 hover:text-zinc-300"
+             }`}
+           >
+             <Hammer className="w-3.5 h-3.5" />
+             Build
+           </button>
+        </div>
+
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-4 lg:p-8 space-y-8 scroll-smooth">
+        <div className="flex-1 overflow-y-auto scroll-smooth">
+          <div className="max-w-3xl mx-auto w-full p-4 lg:p-8 space-y-8">
           {messages.length === 0 && !currentActivity ? (
-            <div className="flex flex-col items-center justify-center h-full max-w-4xl mx-auto w-full animate-in fade-in duration-700">
+            <div className="flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in duration-700">
               <div className="mb-12 text-center space-y-2">
                 <h2 className="text-3xl font-semibold bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent">
                   Good afternoon
@@ -515,21 +721,35 @@ function App() {
             </div>
           ) : (
             <>
-              {messages.map((msg, idx) => (
+              {threadItems.map((item, idx) => {
+                if (item.type === "tool_group") {
+                  return (
+                    <div key={idx} className="w-full animate-in fade-in duration-300 my-4 pl-1">
+                       <div className="flex flex-col gap-2">
+                         {item.tools?.map((tool, tIdx) => (
+                           <ToolBlock key={tIdx} tool={tool} />
+                         ))}
+                       </div>
+                    </div>
+                  );
+                }
+
+                const msg = item as any; // Type assertion for message properties
+                return (
                 <div
                   key={idx}
-                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in slide-in-from-bottom-2 duration-300`}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in slide-in-from-bottom-2 duration-300 group`}
                 >
                   <div
-                    className={`max-w-[85%] lg:max-w-[85%] rounded-2xl px-5 py-3.5 text-sm leading-relaxed shadow-sm overflow-hidden ${
+                    className={`max-w-[100%] rounded-2xl px-6 py-4 text-[15px] leading-relaxed shadow-sm overflow-hidden ${
                       msg.role === "user"
-                        ? "bg-indigo-600 text-white shadow-indigo-500/10 rounded-br-sm"
-                        : "bg-zinc-900 border border-white/5 text-zinc-200 rounded-bl-sm"
+                        ? "bg-zinc-800 text-white rounded-br-sm"
+                        : "bg-transparent text-zinc-200 pl-0"
                     }`}
                   >
-                    <div className="font-normal prose prose-invert max-w-none prose-p:my-1 prose-pre:bg-zinc-950/50 prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg">
+                    <div className="font-normal prose prose-invert max-w-none prose-p:my-1 prose-pre:bg-zinc-900/50 prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg">
                       {Array.isArray(msg.content) ? (
-                        msg.content.map((part, partIdx) => {
+                        msg.content.map((part: any, partIdx: number) => {
                           if (part.type === "image_url" && part.image_url) {
                             return (
                               <img 
@@ -593,7 +813,7 @@ function App() {
                     </div>
                   </div>
                 </div>
-              ))}
+              )})}
             </>
           )}
 
@@ -625,12 +845,14 @@ function App() {
              </div>
           )}
           <div ref={messagesEndRef} className="h-4" />
+          </div>
         </div>
 
         {/* Input Area */}
         <div className="p-4 lg:p-6 pb-6 lg:pb-8">
+          <div className="max-w-3xl mx-auto">
           {errorToast && (
-            <div className="max-w-4xl mx-auto mb-3 px-4 py-3 rounded-xl border border-red-500/40 bg-red-500/10 text-red-100 text-sm flex items-start gap-2">
+            <div className="mb-3 px-4 py-3 rounded-xl border border-red-500/40 bg-red-500/10 text-red-100 text-sm flex items-start gap-2">
               <AlertOctagon className="w-4 h-4 mt-0.5 shrink-0" />
               <div className="flex-1">
                 <div className="font-semibold">{errorToast.message}</div>
@@ -657,7 +879,7 @@ function App() {
             </div>
           )}
           {activeApprovals.length > 0 && (
-            <div className="max-w-4xl mx-auto mb-3 space-y-2">
+            <div className="mb-3 space-y-2">
               {activeApprovals.map((p) => (
                 <div key={p.id} className="px-4 py-3 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-100 flex items-start justify-between gap-3">
                   <div>
@@ -689,7 +911,7 @@ function App() {
           )}
           <form
             onSubmit={(e) => handleSubmit(e)}
-            className="max-w-4xl mx-auto relative group flex flex-col gap-3"
+            className="relative group flex flex-col gap-3"
           >
             <div className="flex items-center gap-2">
                <button
@@ -716,12 +938,45 @@ function App() {
                 ? "border-white/10 focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50" 
                 : "border-white/5 opacity-50 cursor-not-allowed"
             }`}>
+              <button
+                type="button"
+                onClick={() => setShowTemplates(!showTemplates)}
+                disabled={!workingDir}
+                className="ml-3 p-2 rounded-xl text-zinc-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all"
+                title="Templates"
+              >
+                <Bookmark className="w-4 h-4" />
+              </button>
+
+              {showTemplates && (
+                <div className="absolute bottom-full left-0 mb-2 w-64 bg-zinc-900 border border-white/10 rounded-xl shadow-2xl p-2 z-50">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500 px-2 py-1 mb-1 flex justify-between">
+                    <span>Templates</span>
+                    <button onClick={saveAsTemplate} className="hover:text-white">+ Save Current</button>
+                  </div>
+                  {templates.length === 0 ? (
+                    <div className="text-xs text-zinc-500 px-2 py-2 italic">No templates saved.</div>
+                  ) : (
+                    templates.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => { setInput(t.prompt); setShowTemplates(false); inputRef.current?.focus(); }}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-white/5 text-xs text-zinc-300 truncate"
+                      >
+                        {t.title}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+
               <input
+                ref={inputRef}
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={workingDir ? "Ask anything..." : "Please select a folder first..."}
-                className="w-full bg-transparent text-white placeholder-zinc-500 px-5 py-4 focus:outline-none text-[15px] disabled:cursor-not-allowed"
+                className="w-full bg-transparent text-white placeholder-zinc-500 px-3 py-4 focus:outline-none text-[15px] disabled:cursor-not-allowed"
                 disabled={isLoading || !workingDir}
               />
               <button
@@ -737,6 +992,7 @@ function App() {
              <span className="text-[10px] text-zinc-600 font-medium tracking-wide uppercase">
                DeskWork AI • Native & Secure
              </span>
+          </div>
           </div>
         </div>
       </div>

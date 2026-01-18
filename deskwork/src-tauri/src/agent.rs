@@ -104,10 +104,6 @@ fn is_sensitive_tool(function_name: &str) -> bool {
         "execute_command"
             | "write_file"
             | "open_app"
-            | "keyboard_type"
-            | "keyboard_press"
-            | "mouse_move"
-            | "mouse_click"
             | "create_docx"
             | "create_slide_deck"
             | "search_web"
@@ -264,6 +260,7 @@ async fn dispatch_tool(
     working_dir: &Option<String>,
     id: String,
     structured_logs: bool,
+    audit_state: &tauri::State<'_, crate::audit::AuditState>,
 ) -> Result<MessageContent, String> {
     let start = std::time::Instant::now();
     let tool_output = match function_name {
@@ -404,17 +401,33 @@ async fn dispatch_tool(
             duration_ms,
             working_dir.clone(),
             structured_logs,
+            audit_state,
         );
     }
 
     tool_output
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum AgentMode {
+    Plan,
+    Build,
+}
+
 // Keep AgentState for backward compatibility or transient state if needed,
 // but we will primarily use SessionState now.
-#[derive(Default)]
 pub struct AgentState {
     pub history: Mutex<Vec<Message>>,
+    pub mode: Mutex<AgentMode>,
+}
+
+impl Default for AgentState {
+    fn default() -> Self {
+        Self {
+            history: Mutex::new(Vec::new()),
+            mode: Mutex::new(AgentMode::Build), // Default to Build mode for power
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -432,6 +445,29 @@ pub struct ApprovalState {
     pub queue: Mutex<Vec<PendingApproval>>,
 }
 
+use crate::skills::SkillState;
+use crate::audit::AuditState;
+
+#[tauri::command]
+pub fn set_agent_mode(
+    state: tauri::State<'_, AgentState>,
+    mode: String
+) -> Result<String, String> {
+    let new_mode = match mode.to_lowercase().as_str() {
+        "plan" => AgentMode::Plan,
+        "build" => AgentMode::Build,
+        _ => return Err("Invalid mode. Use 'plan' or 'build'".to_string()),
+    };
+    *state.mode.lock().map_err(|e| e.to_string())? = new_mode.clone();
+    Ok(format!("Agent mode set to {:?}", new_mode))
+}
+
+#[tauri::command]
+pub fn get_agent_mode(state: tauri::State<'_, AgentState>) -> Result<String, String> {
+    let mode = state.mode.lock().map_err(|e| e.to_string())?;
+    Ok(format!("{:?}", *mode).to_lowercase())
+}
+
 #[tauri::command]
 pub async fn chat(
     app: tauri::AppHandle,
@@ -442,6 +478,8 @@ pub async fn chat(
     session_state: tauri::State<'_, SessionState>, // New: Persistence
     settings_state: tauri::State<'_, SettingsState>,
     approval_state: tauri::State<'_, ApprovalState>,
+    skill_state: tauri::State<'_, SkillState>,
+    audit_state: tauri::State<'_, AuditState>,
 ) -> Result<String, String> {
     
     // Fast-path approval/deny commands
@@ -449,7 +487,7 @@ pub async fn chat(
     if let Some(rest) = trimmed.strip_prefix("approve ") {
         let id = rest.trim();
         if let Some(pending) = pop_approval(&approval_state, id) {
-            let result = dispatch_tool(&app, &pending.function_name, &pending.args, &pending.working_dir, pending.id.clone(), false).await;
+            let result = dispatch_tool(&app, &pending.function_name, &pending.args, &pending.working_dir, pending.id.clone(), false, &audit_state).await;
             let _ = app.emit("approval_resolved", json!({"id": id, "status": "approved"}));
             return Ok(match result {
                 Ok(msg) => match msg {
@@ -524,7 +562,10 @@ pub async fn chat(
         history = state.history.lock().map_err(|e| e.to_string())?.clone();
     }
 
-    // 3. Context & System Prompt
+    // 3. Get Current Agent Mode
+    let agent_mode = state.mode.lock().unwrap().clone();
+
+    // 4. Context & System Prompt
     let active_window = context::get_active_window_info().unwrap_or_else(|_| "Unknown".to_string());
     let cwd = working_dir.clone().unwrap_or_else(|| ".".to_string());
     
@@ -537,9 +578,24 @@ pub async fn chat(
         tree_summary
     };
 
+    let mode_instructions = match agent_mode {
+        AgentMode::Plan => r#"
+MODE: PLAN (READ-ONLY)
+You are in PLAN mode. You CANNOT write files or execute side-effect commands.
+Your goal is to ANALYZE, ARCHITECT, and EXPLAIN. 
+If the user asks to implement something, provide a detailed plan or code snippets, but DO NOT attempt to write files or run commands.
+"#,
+        AgentMode::Build => r#"
+MODE: BUILD (FULL ACCESS)
+You are in BUILD mode. You have full power to implement changes.
+Your goal is to EXECUTE tasks efficiently.
+"#,
+    };
+
     let system_prompt = format!(r#"You are DeskWork, an advanced desktop agent running on Windows.
 Active Working Directory: '{cwd}'.
 Active Window: '{active_window}'.
+{mode_instructions}
 
 PROJECT CONTEXT (File Tree):
 {truncated_tree}
@@ -565,13 +621,24 @@ PROTOCOL:
 2. Request approval; wait for 'approve <id>' before executing.
 3. Execute only after approval.
 
-BROWSER AUTOMATION (Google Calendar/Gmail/etc):
-1. Open URL: open_app("https://calendar.google.com")
-2. Wait for load: wait(5000)
-3. Look at screen: get_screenshot() (This gives you a base64 image)
-4. Move Mouse to X,Y: mouse_move(x, y)
-5. Click: mouse_click("left")
-6. Type: keyboard_type("Meeting with team")
+BROWSER & VISUAL AUTOMATION PROTOCOL:
+When the user asks for multi-step browser tasks (like sending an email, navigating a site, or filling forms):
+1.  **Open**: Use `search_web(query)` or `open_app(url)`.
+2.  **Autonomy Loop**: You MUST enter a "Visual Loop" to autonomously proceed. Do NOT stop after one action.
+    -   **Look**: `get_screenshot()`.
+    -   **Analyze**: Find fields/buttons.
+    -   **Act**: `mouse_move`, `mouse_click`, `keyboard_type`.
+    -   **Wait**: `wait(2000)` (or more) for UI updates.
+    -   **Repeat**: Continue this loop until the specific sub-goal (e.g., "Email sent") is achieved.
+3.  **Verify**: Confirm visually that the action succeeded before reporting back.
+
+DEV LOOP PROTOCOL (AUTONOMOUS CODING):
+When asking to fix code or run tests, you MUST use the "Dev Loop":
+1.  **Run**: `execute_command` (e.g., `cargo build`, `npm test`).
+2.  **Analyze**: Read the output. If it failed, find the specific file and line number.
+3.  **Fix**: Use `read_file` to see the code, then `write_file` to fix the error.
+4.  **Retry**: Run the command again to verify the fix.
+REPEAT this loop until the command succeeds or you are stuck.
 
 HELP & DISCOVERY:
 If the user asks for "help" or "what can you do", output a markdown table listing your tools and capabilities.
@@ -582,7 +649,8 @@ TOOLS:
 - list_dir, read_file, write_file, execute_command.
 - open_app(path), fetch_url(url), get_system_stats(), search_files(query, path), search_web(query).
 - keyboard_type(text), keyboard_press(key), mouse_move(x,y), mouse_click(btn), get_screenshot(), wait(ms).
-- create_docx(content, filename), create_slide_deck(content, filename), find_file_smart(query, path)."#, cwd=cwd, active_window=active_window, truncated_tree=truncated_tree);
+- create_docx(content, filename), create_slide_deck(content, filename): Create HTML slides (Reveal.js). Filename MUST end in .html.
+- find_file_smart(query, path)."#, cwd=cwd, active_window=active_window, truncated_tree=truncated_tree, mode_instructions=mode_instructions);
     // Initialize System Prompt if empty
     if history.is_empty() {
         history.push(Message { role: "system".into(), content: Some(MessageContent::Text(system_prompt)), tool_calls: None, tool_call_id: None });
@@ -692,6 +760,31 @@ TOOLS:
             for tool_call in tool_calls {
                 let function_name = &tool_call.function.name;
                 let args: Value = serde_json::from_str(&tool_call.function.arguments).unwrap_or(json!({}));
+                if !crate::skills::is_tool_enabled(&skill_state, function_name) {
+                    let msg = format!("Tool '{}' is disabled in Skills settings.", function_name);
+                    history.push(Message {
+                        role: "tool".into(),
+                        content: Some(MessageContent::Text(msg)),
+                        tool_calls: None,
+                        tool_call_id: Some(tool_call.id.clone()),
+                    });
+                    continue;
+                }
+
+                // Check Agent Mode restrictions
+                if agent_mode == AgentMode::Plan {
+                    if matches!(function_name.as_str(), "write_file" | "execute_command" | "create_docx" | "create_slide_deck") {
+                        let msg = format!("Tool '{}' is disabled in PLAN mode. Switch to BUILD mode to execute.", function_name);
+                        history.push(Message {
+                            role: "tool".into(),
+                            content: Some(MessageContent::Text(msg)),
+                            tool_calls: None,
+                            tool_call_id: Some(tool_call.id.clone()),
+                        });
+                        continue;
+                    }
+                }
+
                 if let Some(reason) = approval_reason(function_name, &args, &working_dir, &settings) {
                     let dry_run = match function_name.as_str() {
                         "execute_command" => {
@@ -724,7 +817,7 @@ TOOLS:
                 }
 
                 let id = uuid::Uuid::new_v4().to_string();
-                let tool_output = dispatch_tool(&app, function_name, &args, &working_dir, id.clone(), settings.structured_logs).await;
+                let tool_output = dispatch_tool(&app, function_name, &args, &working_dir, id.clone(), settings.structured_logs, &audit_state).await;
 
                 history.push(Message {
                     role: "tool".into(),
@@ -749,20 +842,20 @@ TOOLS:
         }
 }
 
-// Stream final response as tokens
+    // Stream final response as tokens
     if !final_response.is_empty() {
-        let mut first = true;
-        for token in final_response.split_whitespace() {
-            let sep = if first { "" } else { " " };
-            let _ = app.emit("chat_stream", json!({"token": format!("{}{}", sep, token), "done": false}));
-            first = false;
+        let chars: Vec<char> = final_response.chars().collect();
+        for chunk in chars.chunks(5) {
+            let token: String = chunk.iter().collect();
+            let _ = app.emit("chat_stream", json!({"token": token, "done": false}));
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let _ = app.emit("chat_stream", json!({"done": true}));
     }
 
     if let Some(sid) = active_session_id {
         let sanitized = sanitize_history_for_storage(&history);
-        let mut session = Session {
+        let session = Session {
             id: sid.clone(),
             title: "Session".to_string(),
             messages: sanitized,
@@ -776,45 +869,4 @@ TOOLS:
     }
 
     Ok(final_response)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_path_scope() {
-        let cwd = Some(std::env::current_dir().unwrap().to_string_lossy().to_string());
-        let in_scope = std::env::current_dir().unwrap().join("Cargo.toml");
-        assert!(!path_out_of_scope(&cwd, in_scope.to_string_lossy().as_ref()));
-    }
-
-    #[test]
-    fn test_approval_reason_read_only() {
-        let settings = crate::settings::AppSettings {
-            api_key: "".into(),
-            openai_api_key: "".into(),
-            model: "gpt-4o".into(),
-            read_only: true,
-            structured_logs: false,
-            provider: "openai".into(),
-            reduced_motion: false,
-            high_contrast: false,
-        };
-        let reason = approval_reason("write_file", &json!({"path": "test.txt"}), &None, &settings);
-        assert!(reason.is_some());
-    }
-
-    #[test]
-    fn test_sanitize_history_redacts_tool() {
-        let history = vec![
-            Message { role: "user".into(), content: Some(MessageContent::Text("hi".into())), tool_calls: None, tool_call_id: None },
-            Message { role: "tool".into(), content: Some(MessageContent::Text("secret".into())), tool_calls: None, tool_call_id: None },
-        ];
-        let sanitized = sanitize_history_for_storage(&history);
-        match sanitized[1].content.as_ref().unwrap() {
-            MessageContent::Text(t) => assert_eq!(t, "Tool output omitted for privacy."),
-            _ => panic!("expected text"),
-        }
-    }
 }

@@ -1,0 +1,9 @@
+node_modules
+target
+.deskwork
+*.ppt
+.DS_Store
+.env
+*.log
+terminals
+

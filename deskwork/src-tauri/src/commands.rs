@@ -1,8 +1,7 @@
 use std::fs;
 use std::process::Command;
-use std::path::Path;
 use serde::Serialize;
-use sysinfo::{System, Networks, Components};
+use sysinfo::System;
 use enigo::{Enigo, Key, Keyboard, Mouse, Button, Settings, Direction, Coordinate};
 use std::thread;
 use std::time::Duration;
@@ -63,13 +62,42 @@ pub fn list_dir(path: String) -> Result<Vec<String>, String> {
 pub fn execute_command(command: String, args: Vec<String>, cwd: Option<String>) -> Result<String, String> {
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("powershell");
+        
+        // Escape arguments for PowerShell
+        // 1. Escape the command itself if it has spaces
+        let safe_command = if command.contains(' ') || command.contains('\'') {
+             format!("'{}'", command.replace("'", "''"))
+        } else {
+             command
+        };
+
+        // 2. Escape each argument
+        let safe_args = args.iter()
+            .map(|arg| {
+                 if arg.contains(' ') || arg.contains('\'') {
+                     format!("'{}'", arg.replace("'", "''"))
+                 } else {
+                     arg.clone()
+                 }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
         c.arg("-Command")
-            .arg(format!("{} {}", command, args.join(" ")));
+            .arg(format!("& {} {}", safe_command, safe_args)); // Use call operator '&' for safer execution
         c
     } else {
         let mut c = Command::new("sh");
+        
+        // Escape for POSIX shell
+        let safe_command = format!("'{}'", command.replace("'", "'\\''"));
+        let safe_args = args.iter()
+            .map(|arg| format!("'{}'", arg.replace("'", "'\\''")))
+            .collect::<Vec<_>>()
+            .join(" ");
+            
         c.arg("-c")
-            .arg(format!("{} {}", command, args.join(" ")));
+            .arg(format!("{} {}", safe_command, safe_args));
         c
     };
 
@@ -282,6 +310,13 @@ pub fn create_docx(content: String, filename: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn create_slide_deck(content: String, filename: String) -> Result<(), String> {
+    // Ensure filename ends in .html
+    let final_filename = if filename.to_lowercase().ends_with(".html") {
+        filename
+    } else {
+        format!("{}.html", filename)
+    };
+
     // Basic Reveal.js template
     let mut html = String::from(r#"<!doctype html>
 <html>
@@ -319,7 +354,7 @@ pub fn create_slide_deck(content: String, filename: String) -> Result<(), String
     </body>
 </html>"#);
 
-    fs::write(filename, html).map_err(|e| e.to_string())
+    fs::write(final_filename, html).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

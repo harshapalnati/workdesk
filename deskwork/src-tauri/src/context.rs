@@ -1,7 +1,5 @@
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId};
-#[cfg(target_os = "windows")]
-use windows::Win32::Foundation::HWND;
 
 pub fn get_active_window_info() -> Result<String, String> {
     #[cfg(target_os = "windows")]

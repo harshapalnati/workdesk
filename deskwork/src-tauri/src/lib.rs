@@ -10,11 +10,17 @@ mod settings;
 mod context;
 mod session_manager;
 mod audit;
+mod templates;
+mod skills;
 
 use agent::AgentState;
 use settings::{SettingsState, load_initial_settings};
 use session_manager::SessionState;
 use agent::ApprovalState;
+use templates::TemplateState;
+use skills::SkillState;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,6 +33,15 @@ pub fn run() {
         .manage(ApprovalState::default())
         .manage(SettingsState(std::sync::Mutex::new(initial_settings)))
         .manage(SessionState::default())
+        .manage(SkillState::default())
+        .setup(|app| {
+            let template_state = TemplateState::new(app.handle());
+            app.manage(template_state);
+            
+            let audit_state = audit::init(app.handle());
+            app.manage(audit_state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::read_file,
@@ -49,18 +64,24 @@ pub fn run() {
             commands::find_file_smart,
             commands::wait,
             agent::chat,
+            agent::set_agent_mode,
+            agent::get_agent_mode,
             settings::save_settings,
             settings::get_settings,
             session_manager::list_sessions,
             session_manager::create_session,
-            session_manager::switch_session
-            ,
+            session_manager::switch_session,
             session_manager::rename_session,
             session_manager::toggle_pin,
             session_manager::search_sessions,
             session_manager::export_sessions,
             session_manager::import_sessions,
-            audit::read_audit_log
+            audit::get_audit_log,
+            templates::list_templates,
+            templates::save_template,
+            templates::delete_template,
+            skills::list_skills,
+            skills::toggle_skill
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

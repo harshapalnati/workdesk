@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use crate::agent::{Message, MessageContent};
+use crate::agent::Message;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Session {
